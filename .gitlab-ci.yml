@@ -1,0 +1,47 @@
+stages:
+  - build-test
+  - deploy-test
+
+docker build test:
+  image: 'docker:stable'
+  variables:
+    CONTAINER_IMAGE: registry.gitlab.com/$CI_PROJECT_PATH
+    DOCKER_HOST: 'tcp://docker:2375'
+    DOCKER_DRIVER: overlay2
+  services:
+    - 'docker:dind'
+  stage: build-test
+  before_script:
+    - docker login -u gitlab-ci-token -p $CI_JOB_TOKEN registry.gitlab.com
+  script:
+    - chmod +x ./setup_env.sh
+    - ./setup_env.sh
+    - >-
+      docker build --no-cache --rm --tag
+      $CONTAINER_IMAGE:$CI_COMMIT_SHA --tag $CONTAINER_IMAGE:latest --tag
+      $CI_REGISTRY_IMAGE/$CI_COMMIT_REF_SLUG:$CI_COMMIT_SHA -f Dockerfile .
+    - 'docker push $CONTAINER_IMAGE:$CI_COMMIT_SHA'
+    - 'docker push $CI_REGISTRY_IMAGE/$CI_COMMIT_REF_SLUG:$CI_COMMIT_SHA'
+  only:
+    - test
+docker deploy test:
+  image: 'ubuntu:latest'
+  variables:
+    CONTAINER_IMAGE: registry.gitlab.com/$CI_PROJECT_PATH
+  stage: deploy-test
+  before_script:
+    - >-
+      which ssh-agent || ( apt-get update -y && apt-get install openssh-client
+      -y )
+    - eval $(ssh-agent -s)
+    - echo "$SSH_PRIVATE_KEY_TEST" | tr -d '\r' | ssh-add -
+    - mkdir -p ~/.ssh
+    - chmod 700 ~/.ssh
+    - echo -e "Host *\n\tStrictHostKeyChecking no\n\n" > ~/.ssh/config
+  script:
+    - >-
+      ssh $SERVER_TEST "docker login -u gitlab-ci-token -p $CI_JOB_TOKEN
+      registry.gitlab.com;docker stop $APP_NAME;docker rm $APP_NAME; docker pull $CONTAINER_IMAGE:$CI_COMMIT_SHA;docker run 
+      -p $PORT_TEST:80 --name $APP_NAME -d $CONTAINER_IMAGE:$CI_COMMIT_SHA"
+  only:
+    - test
